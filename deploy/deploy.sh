@@ -16,6 +16,11 @@ umask 077
 docker pull "$DOCKERHUB_USERNAME/devops-cicd-lab:$IMAGE_TAG"
 install -m 644 "$source_dir/compose.yaml" compose.yaml
 docker compose -p devops-cicd-lab up -d --no-build --wait --wait-timeout 120
+actual_version=$(curl --fail --silent --show-error http://127.0.0.1:3000/ | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
+if [[ "$actual_version" != "$IMAGE_TAG" ]]; then
+  printf 'Expected version %s, received %s\n' "$IMAGE_TAG" "$actual_version" >&2
+  exit 1
+fi
 if [[ -f .env ]]; then cp .env .previous.env; fi
 printf 'DOCKERHUB_USERNAME=%s\nIMAGE_TAG=%s\n' "$DOCKERHUB_USERNAME" "$IMAGE_TAG" > .env.next
 mv .env.next .env
