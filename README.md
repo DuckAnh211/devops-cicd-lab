@@ -1,8 +1,8 @@
-# Thực hành CI/CD Node.js
+# Lab CI/CD Node.js
 
-Project được tách từ tài liệu LAB, có ứng dụng Express, test, Dockerfile và workflow staging. Chưa triển khai lên dịch vụ bên ngoài.
+Project thực hành: Express → GitHub Actions → Docker Hub → Docker Compose trên Ubuntu.
 
-## Chạy trên Windows PowerShell
+## Chạy local trên Windows
 
 ```powershell
 cd E:\devops\devops-cicd-lab
@@ -12,69 +12,72 @@ npm test
 npm start
 ```
 
-Ở terminal khác chạy `curl.exe http://127.0.0.1:3000/health` và `curl.exe http://127.0.0.1:3000/`.
-Commit cả `package-lock.json`; Dockerfile và workflow dùng `npm ci` nên bắt buộc cần file này.
+Terminal khác: `curl.exe http://127.0.0.1:3000/health` và `curl.exe http://127.0.0.1:3000/`.
+Commit cả package-lock.json để npm ci và Docker build hoạt động. Lệnh lint hiện chỉ kiểm tra cú pháp.
 
-## Docker local
+## Pipeline thực tế
 
-Cần Docker Desktop chạy Linux containers hoặc Docker Engine trên Ubuntu.
+- Pull request vào main: chạy kiểm tra cú pháp và test trên GitHub-hosted runner.
+- Push main: test → build/push image `duckanh/devops-cicd-lab:<full-sha>` → deploy.
+- Job deploy chạy trên self-hosted runner Linux x64 có label `devops-staging` trong mạng staging.
+- Job deploy dùng environment `staging` và chỉ chạy khi push main. Runner không được dùng cho job test PR.
+- Compose được đồng bộ từ đúng commit trước khi chạy container. Cổng API chỉ bind `127.0.0.1:3000` trên Ubuntu.
 
-```powershell
-docker build -t devops-cicd-lab:local .
-docker run --rm -p 127.0.0.1:3000:3000 --name devops-lab-local devops-cicd-lab:local
-```
+Đây là điều chỉnh so với tài liệu gốc dùng GitHub-hosted runner SSH tới staging: staging của lab dùng IP mạng riêng, nên dùng runner tại staging để không cần mở SSH public.
 
-## Chuẩn bị staging
+## Cấu hình GitHub và Docker Hub
 
-Dùng các bước cài Docker chính thức ở https://docs.docker.com/engine/install/ubuntu/ và tạo user deploy như tài liệu gốc. Quyền nhóm docker tương đương quyền root trên host.
+Repository variable: `DOCKERHUB_USERNAME=duckanh`.
+Repository secret: `DOCKERHUB_TOKEN`, là token Docker Hub có quyền Read & Write. Không đặt token ở Variables hoặc đặt tên environment thay cho secret. Token có hạn 30 ngày cần thay trước khi hết hạn.
+Docker Hub repository `duckanh/devops-cicd-lab` phải Public cho mẫu deploy không đăng nhập registry trên staging này.
 
-User deploy bị khóa mật khẩu nên lần đầu không dùng ssh-copy-id khi chưa có phương thức đăng nhập. Đăng nhập bằng tài khoản quản trị Ubuntu hiện có, rồi cài PUBLIC key:
+## Máy staging
 
-```bash
-sudo install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
-sudo touch /home/deploy/.ssh/authorized_keys
-printf '%s\n' 'THAY_BANG_NOI_DUNG_PUBLIC_KEY' | sudo tee -a /home/deploy/.ssh/authorized_keys >/dev/null
-sudo chown deploy:deploy /home/deploy/.ssh/authorized_keys
-sudo chmod 600 /home/deploy/.ssh/authorized_keys
-```
+Môi trường đã kiểm tra là Ubuntu 22.04 LTS x86_64, có Docker Engine và Compose từ repository Docker chính thức. Ubuntu 22.04 nằm trong danh sách hỗ trợ: https://docs.docker.com/engine/install/ubuntu/.
 
-Giữ private key ở máy của bạn và GitHub Secret; không commit. Trên Windows không có ssh-copy-id mặc định.
+Runner được đặt tại `/opt/actions-runner`, chạy dưới user deploy. Thư mục triển khai là `/opt/devops-cicd-lab`. User deploy có quyền nhóm Docker, tương đương quyền root trên máy. Chỉ người tin cậy được phép sửa workflow hoặc merge code vào main. Điều kiện trong workflow hiện tại không ngăn người có quyền sửa workflow tạo job mới dùng runner.
 
-Ubuntu phải nhận được kết nối SSH từ GitHub-hosted runner. Máy ảo NAT chỉ truy cập được từ laptop chưa đáp ứng điều kiện này; cần mạng truy cập được từ runner hoặc self-hosted runner phù hợp. Không mở port 3000 public.
-
-Sao chép `deploy/compose.yaml` thành `/opt/devops-cicd-lab/compose.yaml`; tạo `.env` tại đó:
-
-```dotenv
-DOCKERHUB_USERNAME=YOUR_DOCKERHUB_USER
-IMAGE_TAG=bootstrap
-```
-
-`bootstrap` chỉ là placeholder; không chạy pull cho tới khi có image SHA thực tế. Chạy `chmod 600 .env`. Repository Docker Hub cần public, hoặc phải login Docker Hub riêng trên server nếu private. Mẫu build mặc định là linux/amd64; server ARM cần thêm build đa kiến trúc.
-
-## GitHub
-
-Tạo environment `staging`. Đặt variables `DOCKERHUB_USERNAME`, `STAGING_HOST`, `STAGING_USER` ở repository; secrets `DOCKERHUB_TOKEN`, `STAGING_SSH_KEY`, `STAGING_KNOWN_HOSTS` ở repository hoặc environment staging phù hợp với job dùng chúng. Token Docker Hub dùng ở job build nên phải khả dụng cho job build.
-
-Lấy host public key qua kênh quản trị server đáng tin cậy, đối chiếu fingerprint (`sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` trên server). Nếu dùng `ssh-keyscan -H SERVER_IP`, phải đối chiếu fingerprint trước khi lưu kết quả vào STAGING_KNOWN_HOSTS. Chỉ keyscan không xác thực danh tính server.
-
-Tạo repository GitHub đích rồi push project với nhánh main theo tài liệu gốc. Không đưa token vào URL Git. Workflow chạy test trên PR, build và deploy khi push main. Compose đang được chép thủ công; khi sửa compose phải đồng bộ lại server.
-
-## Nghiệm thu và rollback
-
-Kiểm tra cả ba job, image SHA trên Docker Hub và `docker compose ps` trên server. Dùng tunnel:
-
-```powershell
-ssh -N -i "$HOME/.ssh/devops_lab_deploy" -L 3000:127.0.0.1:3000 deploy@SERVER_IP
-```
-
-Dừng npm start local trước khi mở tunnel hoặc đổi cổng local sang 3001. Xác nhận `/` trả đúng version SHA, `/health` trả status ok.
-
-Rollback trong thư mục `/opt/devops-cicd-lab` trên Ubuntu:
+Kiểm tra dịch vụ runner trên Ubuntu:
 
 ```bash
-export IMAGE_TAG=PREVIOUS_FULL_SHA
-docker compose pull && docker compose up -d --no-build --wait --wait-timeout 120 && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${IMAGE_TAG}/" .env
-unset IMAGE_TAG
+sudo systemctl list-units 'actions.runner.*'
+sudo -u deploy docker compose -p devops-cicd-lab --project-directory /opt/devops-cicd-lab ps
 ```
 
-Thay PREVIOUS_FULL_SHA bằng SHA đã push thành công. `--wait` kiểm tra sức khỏe nhưng không tự rollback khi lỗi. Cách deploy này có thể gián đoạn trong lúc thay container.
+## Kiểm tra qua SSH tunnel
+
+Trên Windows, dừng npm start nếu đang chiếm cổng 3000, rồi chạy:
+
+```powershell
+ssh -N -L 3000:127.0.0.1:3000 user@STAGING_IP
+```
+
+Terminal khác:
+
+```powershell
+curl.exe http://127.0.0.1:3000/health
+curl.exe http://127.0.0.1:3000/
+```
+
+`/health` phải trả status ok và `/` phải trả version đúng SHA của commit được deploy. Nếu cổng local 3000 đã dùng, đổi vế đầu sang 3001.
+
+## Rollback
+
+Mỗi lần deploy healthy, `.env` lưu tag đang chạy; nếu đã có bản trước, `.previous.env` lưu cấu hình trước lần deploy đó. Trên Ubuntu, chọn SHA cũ đã tồn tại trên Docker Hub:
+
+```bash
+cd /opt/devops-cicd-lab
+sudo -u deploy env IMAGE_TAG=PREVIOUS_FULL_SHA docker compose -p devops-cicd-lab pull
+sudo -u deploy env IMAGE_TAG=PREVIOUS_FULL_SHA docker compose -p devops-cicd-lab up -d --no-build --wait --wait-timeout 120
+```
+
+Sau khi healthy, cập nhật IMAGE_TAG trong .env cho khớp. Có thể chạy lại `deploy/deploy.sh` từ một checkout với `DOCKERHUB_USERNAME=duckanh` và `IMAGE_TAG=<sha>` để cập nhật cả container và .env.
+Không tự động rollback khi healthcheck lỗi; single-container deployment có thể gián đoạn lúc thay container. Không dùng tag bootstrap khi registry chưa có image tương ứng.
+
+## Các file cần xem
+
+- `.github/workflows/main.yml`: 3 job CI/CD.
+- `deploy/deploy.sh`: pull, đồng bộ compose, đợi healthy và lưu tag.
+- `deploy/compose.yaml`: cấu hình ứng dụng staging và healthcheck.
+- `REVIEW.md`: các điểm thiếu/cần sửa trong tài liệu gốc.
+- `VALIDATION.md`: kết quả kiểm tra đã ghi nhận.

@@ -48,26 +48,17 @@ jobs:
   deploy:
     name: Deploy to Ubuntu Staging
     needs: build
-    if: vars.STAGING_HOST != '' && vars.STAGING_USER != ''
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, devops-staging]
+    timeout-minutes: 10
     environment: staging
     steps:
-      - name: Configure SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Deploy selected image tag
         env:
-          STAGING_HOST: ${{ vars.STAGING_HOST }}
-          STAGING_USER: ${{ vars.STAGING_USER }}
-          DEPLOY_SHA: ${{ github.sha }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "${STAGING_USER}@${STAGING_HOST}" \
-            "cd /opt/devops-cicd-lab && IMAGE_TAG=${DEPLOY_SHA} docker compose pull && IMAGE_TAG=${DEPLOY_SHA} docker compose up -d --no-build --wait --wait-timeout 120 && sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=${DEPLOY_SHA}/' .env"
+          bash deploy/deploy.sh
